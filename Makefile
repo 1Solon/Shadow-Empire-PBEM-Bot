@@ -18,7 +18,7 @@ build: setup-build
 
 # Create build directory
 setup-build:
-	if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR)
 
 # Run the application
 run:
@@ -36,7 +36,7 @@ test:
 # Clean build files
 clean:
 	$(GOCLEAN)
-	if exist $(BUILD_DIR) rmdir /S /Q $(BUILD_DIR)
+	rm -rf $(BUILD_DIR)
 
 # Build Docker image
 docker-build:
@@ -44,10 +44,10 @@ docker-build:
 
 # Run Docker container with mounted data directory
 docker-run:
-	docker run -d \
-		-e USER_MAPPINGS="Player1 123456789012345678,Player2 234567890123456789" \
+	docker run -d \		-e USER_MAPPINGS="Player1 123456789012345678,Player2 234567890123456789" \
 		-e GAME_NAME="PBEM1" \
 		-e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url" \
+		-e REMINDER_INTERVAL_MINUTES="720" \
 		-v "./data:/app/data" \
 		$(DOCKER_IMAGE):$(DOCKER_TAG)
 
@@ -57,7 +57,7 @@ docker-stop:
 
 # Create necessary directories
 setup: setup-build
-	if not exist data mkdir data
+	mkdir -p data
 
 # Help command
 help:
