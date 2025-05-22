@@ -1,6 +1,20 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
-  ]
+    "config:recommended",
+    ":gomod",
+    ":enableVulnerabilityAlerts",
+    ":docker"
+  ],
+  "postUpdateOptions": ["gomodTidy"],
+  "schedule": ["every weekend"],
+  "docker": {
+    "enabled": true
+  },
+  "dockerfile": {
+    "pinDigests": true
+  },
+  "github-actions": {
+    "enabled": true
+  }
 }
