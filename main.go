@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/1Solon/shadow-empire-pbem-bot/pkg/monitor"
 	"github.com/joho/godotenv"
@@ -55,6 +56,23 @@ func main() {
 		fmt.Println("ℹ️ FILE_DEBOUNCE_MS environment variable is not set, using default: 30000 (30 seconds)")
 	} else {
 		fmt.Printf("⏱️ File debounce time set to %s seconds\n", os.Getenv("FILE_DEBOUNCE_MS"))
+	}
+
+	// Check if REMINDER_INTERVAL_MINUTES is set
+	if os.Getenv("REMINDER_INTERVAL_MINUTES") == "" {
+		fmt.Println("ℹ️ REMINDER_INTERVAL_MINUTES environment variable is not set, using default: 720 minutes (12 hours)")
+	} else {
+		minutes, _ := strconv.Atoi(os.Getenv("REMINDER_INTERVAL_MINUTES"))
+		hours := minutes / 60
+		mins := minutes % 60
+
+		if hours > 0 && mins > 0 {
+			fmt.Printf("⏰ Reminder interval set to %d hours and %d minutes\n", hours, mins)
+		} else if hours > 0 {
+			fmt.Printf("⏰ Reminder interval set to %d hours\n", hours)
+		} else {
+			fmt.Printf("⏰ Reminder interval set to %d minutes\n", mins)
+		}
 	}
 
 	// Start monitoring the directory, default to "./data"

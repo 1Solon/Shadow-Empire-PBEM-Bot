@@ -184,3 +184,48 @@ func SendRenameWebHook(username, discordID, filename string, turnNumber int) err
 
 	return sendDiscordWebhook(&payload, username, discordID, true)
 }
+
+// SendReminderWebHook sends a Discord webhook notification reminding a player it's their turn
+func SendReminderWebHook(username, discordID, nextPlayerSaveName string, turnNumber int, minutesElapsed int) error {
+	gameName := getGameName()
+
+	// Format elapsed time as hours and minutes for display
+	hours := minutesElapsed / 60
+	minutes := minutesElapsed % 60
+	var timeElapsedText string
+	if hours > 0 && minutes > 0 {
+		timeElapsedText = fmt.Sprintf("%d hours and %d minutes", hours, minutes)
+	} else if hours > 0 {
+		timeElapsedText = fmt.Sprintf("%d hours", hours)
+	} else {
+		timeElapsedText = fmt.Sprintf("%d minutes", minutes)
+	}
+
+	// Create webhook payload
+	payload := types.DiscordWebhook{
+		Username:  "Shadow Empire Assistant",
+		AvatarURL: "https://raw.githubusercontent.com/auricom/home-ops/main/docs/src/assets/logo.png",
+		Content:   fmt.Sprintf("⏰ Reminder! It's still your turn, <@%s>! (%s elapsed)", discordID, timeElapsedText),
+		Embeds: []types.Embed{
+			{
+				Color: 0xFF9900, // Orange-yellow for reminder
+				Thumbnail: types.Thumbnail{
+					URL: "https://upload.wikimedia.org/wikipedia/en/4/4f/Shadow_Empire_cover.jpg",
+				},
+				Fields: []types.Field{
+					{
+						Name:  "📋 Save File Instructions",
+						Value: fmt.Sprintf("After completing your turn, please save the file as:\n```\n%s_turn%d_%s\n```", gameName, turnNumber, nextPlayerSaveName),
+					},
+				},
+				Footer: types.Footer{
+					Text: "Made with ❤️ by Solon",
+				},
+				Timestamp: time.Now().Format(time.RFC3339),
+			},
+		},
+	}
+
+	// Pass username for logging purposes in sendDiscordWebhook
+	return sendDiscordWebhook(&payload, username, discordID, false)
+}

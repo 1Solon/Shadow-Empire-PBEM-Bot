@@ -17,6 +17,7 @@ _A Discord bot for automating player turns in Shadow Empire Play-By-Email (PBEM)
 - Automatically detects which player just completed their turn
 - Determines the current turn number
 - Notifies the next player via Discord webhook when it's their turn
+- Sends configurable reminders to players who haven't taken their turn
 - Automatically detects if a save file is misnamed and informs the player
 - Configurable file name pattern matching and debouncing
 - Runs in Docker for easy deployment
@@ -51,6 +52,7 @@ services:
       - WATCH_DIRECTORY=/app/data
       - IGNORE_PATTERNS=backup,temp
       - FILE_DEBOUNCE_MS=30000
+      - REMINDER_INTERVAL_MINUTES=720
     restart: unless-stopped
 ```
 
@@ -68,14 +70,15 @@ go build -o shadow-empire-bot .
 
 ## 📚 Environment Variables
 
-| Variable              | Description                                                                                 | Required | Default  |
-| :-------------------- | :------------------------------------------------------------------------------------------ | :------: | :------- |
-| `USER_MAPPINGS`       | Comma-separated list of usernames and Discord IDs (format: `TurnNumber Username DiscordID`) |    ✅    | None     |
-| `GAME_NAME`           | Name prefix for save files                                                                  |    ❌    | "pbem1"  |
-| `DISCORD_WEBHOOK_URL` | Discord webhook URL for notifications                                                       |    ✅    | None     |
-| `WATCH_DIRECTORY`     | Directory to monitor for save files                                                         |    ❌    | "./data" |
-| `IGNORE_PATTERNS`     | Comma-separated patterns to ignore in filenames                                             |    ❌    | None     |
-| `FILE_DEBOUNCE_MS`    | Milliseconds to wait after file detection before processing                                 |    ❌    | 30000    |
+| Variable                  | Description                                                                                 | Required | Default       |
+| :----------------------- | :------------------------------------------------------------------------------------------ | :------: | :------------ |
+| `USER_MAPPINGS`          | Comma-separated list of usernames and Discord IDs (format: `TurnNumber Username DiscordID`) |    ✅    | None          |
+| `GAME_NAME`              | Name prefix for save files                                                                  |    ❌    | "pbem1"       |
+| `DISCORD_WEBHOOK_URL`    | Discord webhook URL for notifications                                                       |    ✅    | None          |
+| `WATCH_DIRECTORY`        | Directory to monitor for save files                                                         |    ❌    | "./data"      |
+| `IGNORE_PATTERNS`        | Comma-separated patterns to ignore in filenames                                             |    ❌    | None          |
+| `FILE_DEBOUNCE_MS`       | Milliseconds to wait after file detection before processing                                 |    ❌    | 30000         |
+| `REMINDER_INTERVAL_MINUTES` | Minutes to wait before sending turn reminder notifications                               |    ❌    | 720 (12 hours) |
 
 ### .env File Support
 
@@ -88,6 +91,7 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your-webhook-url
 WATCH_DIRECTORY=./data
 IGNORE_PATTERNS=backup,temp
 FILE_DEBOUNCE_MS=30000
+REMINDER_INTERVAL_MINUTES=720
 ```
 
 ---
@@ -134,6 +138,7 @@ docker run -d \
   -e USER_MAPPINGS="1 Player1 123456789012345678,2 Player2 234567890123456789" \
   -e GAME_NAME="PBEM1" \
   -e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url" \
+  -e REMINDER_INTERVAL_MINUTES="720" \
   -v "C:/Users/<username>/Documents/My Games/Shadow Empire/<game name>:/app/data" \
   ghcr.io/1solon/shadow-empire-pbem-bot:latest
 ```
@@ -145,6 +150,7 @@ export USER_MAPPINGS="1 Player1 123456789012345678,2 Player2 234567890123456789"
 export GAME_NAME="PBEM1"
 export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url"
 export WATCH_DIRECTORY="C:/Users/<username>/Documents/My Games/Shadow Empire/<game name>"
+export REMINDER_INTERVAL_MINUTES="720"
 ./shadow-empire-bot
 ```
 

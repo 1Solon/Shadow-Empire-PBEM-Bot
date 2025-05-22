@@ -19,6 +19,16 @@ type FileTrackingInfo struct {
 	Processed bool
 }
 
+// TurnInfo stores information about the current player's turn
+type TurnInfo struct {
+	StartedAt      time.Time
+	Username       string
+	DiscordID      string
+	NextUsername   string
+	TurnNumber     int
+	LastRemindedAt time.Time
+}
+
 // parseIgnorePatterns parses comma-separated ignore patterns from environment variable
 func parseIgnorePatterns() []string {
 	patterns := os.Getenv("IGNORE_PATTERNS")
@@ -73,6 +83,28 @@ func MonitorDirectory(dirPath string) {
 	// Current turn tracking
 	currentTurn := 1
 
+	// Current player turn tracking
+	var currentTurnInfo *TurnInfo = nil
+
+	// Get reminder interval from environment or default to 12 hours (720 minutes)
+	reminderIntervalMinutes := 720 // Default: 12 hours in minutes
+	if reminderEnv := os.Getenv("REMINDER_INTERVAL_MINUTES"); reminderEnv != "" {
+		if parsed, err := strconv.Atoi(reminderEnv); err == nil && parsed > 0 {
+			reminderIntervalMinutes = parsed
+		}
+	}
+
+	// Calculate hours and minutes for display purposes
+	displayHours := reminderIntervalMinutes / 60
+	displayMinutes := reminderIntervalMinutes % 60
+	if displayHours > 0 && displayMinutes > 0 {
+		fmt.Printf("⏰ Reminder interval set to %d hours and %d minutes\n", displayHours, displayMinutes)
+	} else if displayHours > 0 {
+		fmt.Printf("⏰ Reminder interval set to %d hours\n", displayHours)
+	} else {
+		fmt.Printf("⏰ Reminder interval set to %d minutes\n", displayMinutes)
+	}
+
 	// Get file debounce time from environment or default to 30 seconds
 	fileDebounceMs := 30000
 	if debounceEnv := os.Getenv("FILE_DEBOUNCE_MS"); debounceEnv != "" {
@@ -108,8 +140,53 @@ func MonitorDirectory(dirPath string) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	reminderIntervalDuration := time.Duration(reminderIntervalMinutes) * time.Minute
+
 	for range ticker.C {
-		currentTurn = processDirectory(dirPath, fileTracker, userMappings, fileDebounceMs, ignorePatterns, currentTurn)
+		// Process directory for new files
+		currentTurn, currentTurnInfo = processDirectory(dirPath, fileTracker, userMappings, fileDebounceMs, ignorePatterns, currentTurn, currentTurnInfo)
+
+		// Check if we should send a reminder
+		if currentTurnInfo != nil {
+			timeSinceTurnStart := time.Since(currentTurnInfo.StartedAt)
+			timeSinceLastReminder := time.Since(currentTurnInfo.LastRemindedAt)
+
+			// If this is the first reminder or enough time has passed since the last reminder
+			if (currentTurnInfo.LastRemindedAt.IsZero() && timeSinceTurnStart >= reminderIntervalDuration) ||
+				(!currentTurnInfo.LastRemindedAt.IsZero() && timeSinceLastReminder >= reminderIntervalDuration) {
+
+				// Send reminder
+				minutesElapsed := int(timeSinceTurnStart.Minutes())
+				hours := minutesElapsed / 60
+				minutes := minutesElapsed % 60
+
+				if hours > 0 && minutes > 0 {
+					fmt.Printf("⏰ Sending turn reminder to %s (%s) - %d hours and %d minutes elapsed since turn start\n",
+						currentTurnInfo.Username, currentTurnInfo.DiscordID, hours, minutes)
+				} else if hours > 0 {
+					fmt.Printf("⏰ Sending turn reminder to %s (%s) - %d hours elapsed since turn start\n",
+						currentTurnInfo.Username, currentTurnInfo.DiscordID, hours)
+				} else {
+					fmt.Printf("⏰ Sending turn reminder to %s (%s) - %d minutes elapsed since turn start\n",
+						currentTurnInfo.Username, currentTurnInfo.DiscordID, minutes)
+				}
+
+				err := webhook.SendReminderWebHook(
+					currentTurnInfo.Username,
+					currentTurnInfo.DiscordID,
+					currentTurnInfo.NextUsername,
+					currentTurnInfo.TurnNumber,
+					minutesElapsed,
+				)
+
+				if err == nil {
+					// Update the last reminded time
+					currentTurnInfo.LastRemindedAt = time.Now()
+				} else {
+					fmt.Printf("❌ Failed to send reminder: %v\n", err)
+				}
+			}
+		}
 	}
 }
 
@@ -129,10 +206,10 @@ func extractTurnNumber(filename string) int {
 }
 
 // processDirectory handles a single directory scan iteration
-// Returns the current turn number (possibly updated)
+// Returns the current turn number and turn info (possibly updated)
 func processDirectory(dirPath string, fileTracker map[string]*FileTrackingInfo,
 	userMappings []userparser.UserMapping,
-	fileDebounceMs int, ignorePatterns []string, currentTurn int) int {
+	fileDebounceMs int, ignorePatterns []string, currentTurn int, currentTurnInfo *TurnInfo) (int, *TurnInfo) {
 
 	now := time.Now().UnixMilli()
 
@@ -149,7 +226,7 @@ func processDirectory(dirPath string, fileTracker map[string]*FileTrackingInfo,
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
 		fmt.Printf("❌ Error reading directory: %v\n", err)
-		return currentTurn
+		return currentTurn, currentTurnInfo
 	}
 
 	// Process each file
@@ -252,7 +329,21 @@ func processDirectory(dirPath string, fileTracker map[string]*FileTrackingInfo,
 				fmt.Printf("🔄 Turn %d: It's %s's turn (save from %s). Next up: %s (for turn %d)\n", currentTurn, currentUserMapping.Username, previousUserMapping.Username, nextUserMapping.Username, saveInstructionTurnNumber)
 
 				// Send webhook to the *current* player, instructing them to save for the *next* player, using the correct turn number for the save instruction
-				webhook.SendWebHook(currentUserMapping.Username, currentUserMapping.DiscordID, nextUserMapping.Username, saveInstructionTurnNumber)
+				err := webhook.SendWebHook(currentUserMapping.Username, currentUserMapping.DiscordID, nextUserMapping.Username, saveInstructionTurnNumber)
+
+				if err == nil {
+					// Update the current turn info for reminder tracking
+					currentTurnInfo = &TurnInfo{
+						StartedAt:      time.Now(),
+						Username:       currentUserMapping.Username,
+						DiscordID:      currentUserMapping.DiscordID,
+						NextUsername:   nextUserMapping.Username,
+						TurnNumber:     saveInstructionTurnNumber,
+						LastRemindedAt: time.Time{}, // Zero time indicates no reminders sent yet
+					}
+
+					fmt.Printf("✅ Started tracking turn for %s (reminders will be sent if needed)\n", currentUserMapping.Username)
+				}
 
 				info.Processed = true
 			} else {
@@ -270,5 +361,5 @@ func processDirectory(dirPath string, fileTracker map[string]*FileTrackingInfo,
 		}
 	}
 
-	return currentTurn
+	return currentTurn, currentTurnInfo
 }
