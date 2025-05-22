@@ -1,0 +1,72 @@
+version: '3'
+
+vars:
+  BINARY_NAME: shadow-empire-bot
+  DOCKER_IMAGE: ghcr.io/1solon/shadow-empire-pbem-bot
+  DOCKER_TAG: latest
+  BUILD_DIR: build
+
+tasks:
+  default:
+    desc: Build the application with dependencies
+    deps: [deps, build]
+
+  build:
+    desc: Build the application
+    deps: [setup-build]
+    cmds:
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} -v
+
+  setup-build:
+    desc: Create build directory
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+
+  run:
+    desc: Run the application
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY_NAME}}
+
+  deps:
+    desc: Tidy up dependencies
+    cmds:
+      - go mod tidy
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  clean:
+    desc: Clean build files
+    cmds:
+      - go clean
+      - rm -rf {{.BUILD_DIR}}
+
+  docker-build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t {{.DOCKER_IMAGE}}:{{.DOCKER_TAG}} .
+
+  docker-run:
+    desc: Run Docker container with mounted data directory
+    cmds:
+      - >
+        docker run -d
+        -e USER_MAPPINGS="Player1 123456789012345678,Player2 234567890123456789"
+        -e GAME_NAME="PBEM1"
+        -e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url"
+        -e REMINDER_INTERVAL_MINUTES="720"
+        -v "./data:/app/data"
+        {{.DOCKER_IMAGE}}:{{.DOCKER_TAG}}
+
+  docker-stop:
+    desc: Stop all running containers of this image
+    cmds:
+      - docker stop $(docker ps -q --filter ancestor={{.DOCKER_IMAGE}}:{{.DOCKER_TAG}}) 2>/dev/null || true
+
+  setup:
+    desc: Create necessary directories
+    deps: [setup-build]
+    cmds:
+      - mkdir -p data
