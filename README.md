@@ -21,6 +21,7 @@ _A Discord bot for automating player turns in Shadow Empire Play-By-Email (PBEM)
 - Automatically detects if a save file is misnamed and informs the player
 - Configurable file name pattern matching and debouncing
 - Filters to only process expected file extensions (default: .se1)
+- Supports player resignations via simple files in the watch directory
 - Runs in Docker for easy deployment
 - Lightweight and efficient
 
@@ -176,3 +177,26 @@ PBEM1_Player1_turn1
 > **Note:** The number in PBEM1 can be incremented for different game instances (PBEM2, PBEM3, etc.)
 
 This bot supports both styles and also tolerates missing trailing underscores.
+
+---
+
+## 🚪 Player Resignations
+
+You can remove a player from the turn order by dropping a small "resign" file in the watch directory (same folder as your saves). The filename should contain the player's username and the word resign. Examples (case-insensitive):
+
+```text
+solon_resign.se1
+resign_solon
+resign-solon
+pbem1_resign_solon
+solon-resign
+solon.resign
+```
+
+Notes:
+
+- The username must match the one configured in `USER_MAPPINGS` (case-insensitive).
+- Resignations are detected at startup and during runtime.
+- Once a player resigns, they are removed from the active rotation and reminders for them are stopped.
+- If fewer than two players remain, the bot pauses turn processing until more players are active.
+- Startup behavior: existing resign files are honored but do not trigger a Discord ping. A ping is sent only when a new resign file appears while the bot is running.

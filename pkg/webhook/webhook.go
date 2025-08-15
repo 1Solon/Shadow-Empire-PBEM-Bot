@@ -132,8 +132,13 @@ func SendWebHook(targetUsername, targetDiscordID, nextPlayerSaveName string, tur
 				Fields: []types.Field{
 					{
 						Name: "📋 Save File Instructions",
-						// Instruct to save for the player *after* the current one
-						Value: fmt.Sprintf("After completing your turn, please save the file as:\n```\n%s_turn%d_%s\n```", gameName, turnNumber, nextPlayerSaveName),
+						// Instruct to save for the player *after* the current one and how to resign
+						Value: fmt.Sprintf(
+							"After completing your turn, please save the file as:\n```\n%s_turn%d_%s\n```\n\nIf you need to resign, create a file named:\n```\n%s_resign_%s\n```\n(or `%s_resign`)",
+							gameName, turnNumber, nextPlayerSaveName,
+							gameName, targetUsername,
+							targetUsername,
+						),
 					},
 				},
 				Footer: types.Footer{
@@ -210,8 +215,12 @@ func SendReminderWebHook(username, discordID, nextPlayerSaveName string, turnNum
 				},
 				Fields: []types.Field{
 					{
-						Name:  "📋 Save File Instructions",
-						Value: fmt.Sprintf("After completing your turn, please save the file as:\n```\n%s_turn%d_%s\n```", gameName, turnNumber, nextPlayerSaveName),
+						Name: "📋 Save File Instructions",
+						Value: fmt.Sprintf(
+							"After completing your turn, save the file as:\n```\n%s_turn%d_%s\n```If the next player is no longer playing, create this file:\n```\nresign_%s\n```",
+							gameName, turnNumber, nextPlayerSaveName,
+							nextPlayerSaveName,
+						),
 					},
 				},
 				Footer: types.Footer{
@@ -232,6 +241,32 @@ func maskID(id string) string {
 		return "****"
 	}
 	return "****" + id[len(id)-4:]
+}
+
+// SendResignationWebHook announces that a player has resigned from the game
+func SendResignationWebHook(username, discordID string, cfg types.Config) error {
+	// Create webhook payload matching the style of other messages
+	payload := types.DiscordWebhook{
+		Username:  "Shadow Empire Assistant",
+		AvatarURL: "https://raw.githubusercontent.com/auricom/home-ops/main/docs/src/assets/logo.png",
+		Content:   fmt.Sprintf("🚪 <@%s> has resigned from %s.", discordID, cfg.GameName),
+		Embeds: []types.Embed{
+			{
+				Color:     0xFF0000, // Red tone for resignation
+				Thumbnail: types.Thumbnail{URL: "https://upload.wikimedia.org/wikipedia/en/4/4f/Shadow_Empire_cover.jpg"},
+				Fields: []types.Field{
+					{
+						Name:  "📋 Turn Order Update",
+						Value: fmt.Sprintf("%s has been removed from the turn rotation. Future turns and reminders will skip this player.", username),
+					},
+				},
+				Footer:    types.Footer{Text: "Made with ❤️ by Solon"},
+				Timestamp: time.Now().Format(time.RFC3339),
+			},
+		},
+	}
+
+	return sendDiscordWebhook(&payload, username, discordID, false, cfg)
 }
 
 // parseRetryAfter figures out how long to wait from Discord rate limit headers

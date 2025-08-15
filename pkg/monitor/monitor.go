@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,84 @@ type TurnInfo struct {
 	NextUsername   string
 	TurnNumber     int
 	LastRemindedAt time.Time
+}
+
+// normalize lowercases and trims a string
+func normalize(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// matchResignUsername checks if the given filename represents a resignation file
+// for any known user. It returns the matched username and true if a resignation
+// was detected. Supported formats (case-insensitive, extension ignored):
+//   - <username>
+//   - <username>.resign
+//   - resign_<username>
+//   - resign-<username>
+//   - <username>_resign
+//   - <username>-resign
+//   - <game>_resign_<username>
+//   - <game>_resign-<username>
+func matchResignUsername(filename, gameName string, userMappings []userparser.UserMapping) (string, bool) {
+	// remove extension if any (we only compare base name semantics)
+	base := filename
+	if ext := filepath.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	lf := normalize(base)
+	lg := normalize(gameName)
+	for _, u := range userMappings {
+		un := normalize(u.Username)
+		candidates := []string{
+			un,
+			un + ".resign", // in case ext remained in the name itself
+			"resign_" + un,
+			"resign-" + un,
+			un + "_resign",
+			un + "-resign",
+			lg + "_resign_" + un,
+			lg + "_resign-" + un,
+		}
+		for _, c := range candidates {
+			if lf == c {
+				return u.Username, true
+			}
+		}
+	}
+	return "", false
+}
+
+// filterUserMappings removes any users present in resigned map (case-insensitive keys)
+func filterUserMappings(mappings []userparser.UserMapping, resigned map[string]bool) []userparser.UserMapping {
+	if len(resigned) == 0 {
+		return mappings
+	}
+	out := make([]userparser.UserMapping, 0, len(mappings))
+	for _, m := range mappings {
+		if !resigned[normalize(m.Username)] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// scanResignations scans dirPath for files indicating player resignation.
+// It returns a map of normalized usernames who have resigned.
+func scanResignations(dirPath, gameName string, userMappings []userparser.UserMapping) map[string]bool {
+	resigned := make(map[string]bool)
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		log.Printf("❌ Error reading directory for resignations: %v\n", err)
+		return resigned
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if uname, ok := matchResignUsername(name, gameName, userMappings); ok {
+			resigned[normalize(uname)] = true
+		}
+	}
+	return resigned
 }
 
 // parseIgnorePatterns parses comma-separated ignore patterns from environment variable
@@ -82,15 +161,27 @@ func MonitorDirectory(ctx context.Context, cfg types.Config) {
 		log.Fatalf("❌ Failed to parse USER_MAPPINGS: %v. Please check the format (e.g., '1 User1 ID1,2 User2 ID2').", err)
 	}
 
+	// Apply resignations from files at startup
+	resigned := scanResignations(dirPath, cfg.GameName, userMappings)
+	activeMappings := filterUserMappings(userMappings, resigned)
+	if len(resigned) > 0 {
+		// Log resigned users (do not send notifications on startup)
+		names := make([]string, 0, len(resigned))
+		for k := range resigned {
+			names = append(names, k)
+		}
+		log.Printf("🚪 Detected resignations on startup: %s\n", strings.Join(names, ", "))
+	}
+
 	// Parse ignore patterns from cfg
 	ignorePatterns := cfg.IgnorePatterns
 	if len(ignorePatterns) > 0 {
 		fmt.Printf("🚫 Loaded %d ignore patterns\n", len(ignorePatterns))
 	}
 
-	// Log the parsed user mappings
-	log.Printf("👥 Loaded %d user mappings:\n", len(userMappings))
-	for _, mapping := range userMappings {
+	// Log the parsed user mappings (active only)
+	log.Printf("👥 Loaded %d active user mappings (of %d total):\n", len(activeMappings), len(userMappings))
+	for _, mapping := range activeMappings {
 		log.Printf("  - Order: %d, User: %s, ID: %s\n", mapping.Order, mapping.Username, maskID(mapping.DiscordID))
 	}
 
@@ -130,7 +221,7 @@ func MonitorDirectory(ctx context.Context, cfg types.Config) {
 	}
 
 	// Bootstrap current turn info from the most recent valid save so reminders resume after restart
-	if info, ct := bootstrapCurrentTurnFromExistingFiles(dirPath, files, userMappings, cfg); info != nil {
+	if info, ct := bootstrapCurrentTurnFromExistingFiles(dirPath, files, activeMappings, cfg); info != nil {
 		currentTurnInfo = info
 		if ct > 0 {
 			currentTurn = ct
@@ -149,6 +240,8 @@ func MonitorDirectory(ctx context.Context, cfg types.Config) {
 	defer ticker.Stop()
 
 	reminderIntervalDuration := time.Duration(reminderIntervalMinutes) * time.Minute
+	// Track a snapshot of resignations to log only when it changes
+	lastResignSnapshot := ""
 
 	for {
 		select {
@@ -156,8 +249,75 @@ func MonitorDirectory(ctx context.Context, cfg types.Config) {
 			fmt.Println("🛑 Shutting down monitor...")
 			return
 		case <-ticker.C:
-			// Process directory for new files
-			currentTurn, currentTurnInfo = processDirectory(dirPath, fileTracker, userMappings, fileDebounceMs, ignorePatterns, cfg, currentTurn, currentTurnInfo)
+			// Refresh resignations each tick
+			prevResigned := resigned
+			resigned = scanResignations(dirPath, cfg.GameName, userMappings)
+			activeMappings = filterUserMappings(userMappings, resigned)
+			if len(resigned) > 0 {
+				names := make([]string, 0, len(resigned))
+				for k := range resigned {
+					names = append(names, k)
+				}
+				// stable order for snapshot
+				sort.Strings(names)
+				snapshot := strings.Join(names, ",")
+				if snapshot != lastResignSnapshot {
+					log.Printf("🚪 Resignations detected: %s\n", strings.Join(names, ", "))
+					lastResignSnapshot = snapshot
+					// Notify for any newly resigned players
+					for _, m := range userMappings {
+						if resigned[normalize(m.Username)] && !prevResigned[normalize(m.Username)] {
+							if err := webhook.SendResignationWebHook(m.Username, m.DiscordID, cfg); err != nil {
+								log.Printf("❌ Failed to send resignation notification for %s: %v\n", m.Username, err)
+							}
+						}
+					}
+				}
+			}
+
+			// Cancel reminders if current player resigned
+			if currentTurnInfo != nil {
+				isActive := false
+				for _, m := range activeMappings {
+					if normalize(m.Username) == normalize(currentTurnInfo.Username) {
+						isActive = true
+						break
+					}
+				}
+				if !isActive {
+					log.Printf("🚪 Current player %s resigned; canceling reminders until next save\n", currentTurnInfo.Username)
+					currentTurnInfo = nil
+				}
+			}
+
+			if len(activeMappings) < 2 {
+				// Not enough players to maintain a turn order
+				log.Printf("⚠️ Only %d active player(s) after resignations; skipping processing this tick\n", len(activeMappings))
+				continue
+			}
+
+			// Ensure the reminder target (NextUsername) skips any resigned players
+			if currentTurnInfo != nil {
+				// Find current player's index within active mappings
+				idx := -1
+				for i, m := range activeMappings {
+					if normalize(m.Username) == normalize(currentTurnInfo.Username) {
+						idx = i
+						break
+					}
+				}
+				if idx != -1 {
+					nextIdx := (idx + 1) % len(activeMappings)
+					newNext := activeMappings[nextIdx].Username
+					if newNext != currentTurnInfo.NextUsername {
+						log.Printf("🔧 Next player changed due to resignation(s): %s -> %s\n", currentTurnInfo.NextUsername, newNext)
+						currentTurnInfo.NextUsername = newNext
+					}
+				}
+			}
+
+			// Process directory for new files using active mappings
+			currentTurn, currentTurnInfo = processDirectory(dirPath, fileTracker, activeMappings, fileDebounceMs, ignorePatterns, cfg, currentTurn, currentTurnInfo)
 
 			// Check if we should send a reminder
 			if currentTurnInfo != nil {
@@ -247,6 +407,16 @@ func processDirectory(dirPath string, fileTracker map[string]*FileTrackingInfo,
 	// Process each file
 	for _, file := range files {
 		if file.IsDir() {
+			continue
+		}
+
+		// Skip resign files from normal processing
+		if uname, ok := matchResignUsername(file.Name(), cfg.GameName, userMappings); ok {
+			lf := strings.ToLower(file.Name())
+			if _, exists := fileTracker[lf]; !exists {
+				fileTracker[lf] = &FileTrackingInfo{FirstSeen: now, Processed: true}
+			}
+			fmt.Printf("🚪 Resignation file detected for user %s: %s (ignored for save processing)\n", uname, file.Name())
 			continue
 		}
 
