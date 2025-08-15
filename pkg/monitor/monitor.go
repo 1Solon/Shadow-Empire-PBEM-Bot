@@ -128,6 +128,16 @@ func MonitorDirectory(ctx context.Context, cfg types.Config) {
 			}
 		}
 	}
+
+	// Bootstrap current turn info from the most recent valid save so reminders resume after restart
+	if info, ct := bootstrapCurrentTurnFromExistingFiles(dirPath, files, userMappings, cfg); info != nil {
+		currentTurnInfo = info
+		if ct > 0 {
+			currentTurn = ct
+		}
+		log.Printf("🔁 Resumed tracking turn for %s (turn %d) from latest save; reminders will consider elapsed time since %s\n",
+			currentTurnInfo.Username, currentTurnInfo.TurnNumber, currentTurnInfo.StartedAt.Format(time.RFC3339))
+	}
 	log.Printf("📋 Initialized with %d existing files\n", len(fileTracker))
 
 	// Set up polling interval
@@ -386,4 +396,77 @@ func processDirectory(dirPath string, fileTracker map[string]*FileTrackingInfo,
 	}
 
 	return currentTurn, currentTurnInfo
+}
+
+// bootstrapCurrentTurnFromExistingFiles inspects existing files to infer the current turn
+// and the current player from the most recent save. Returns a TurnInfo initialized with
+// the file's modification time as StartedAt to allow reminders to resume.
+func bootstrapCurrentTurnFromExistingFiles(dirPath string, entries []os.DirEntry, userMappings []userparser.UserMapping, cfg types.Config) (*TurnInfo, int) {
+	var latestFile string
+	var latestMod time.Time
+
+	gameName := strings.ToLower(cfg.GameName)
+
+	// Find the most recently modified valid file
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if !hasAllowedExtension(name, cfg.AllowedExtensions) {
+			continue
+		}
+		if len(cfg.IgnorePatterns) > 0 && shouldIgnoreFile(name, cfg.IgnorePatterns) {
+			continue
+		}
+		if !strings.HasPrefix(name, gameName) {
+			continue
+		}
+		fi, err := os.Stat(filepath.Join(dirPath, e.Name()))
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().After(latestMod) {
+			latestMod = fi.ModTime()
+			latestFile = name
+		}
+	}
+
+	if latestFile == "" {
+		return nil, 0
+	}
+
+	// Infer turn number
+	inferredTurn := extractTurnNumber(latestFile)
+
+	// Determine current player from filename
+	currentPlayerIndex := -1
+	for i, m := range userMappings {
+		if strings.Contains(latestFile, strings.ToLower(m.Username)) {
+			currentPlayerIndex = i
+			break
+		}
+	}
+	if currentPlayerIndex == -1 {
+		return nil, inferredTurn
+	}
+
+	currentUser := userMappings[currentPlayerIndex]
+	nextIndex := (currentPlayerIndex + 1) % len(userMappings)
+	nextUser := userMappings[nextIndex]
+
+	// Compute instruction turn number consistent with runtime logic
+	saveInstructionTurn := inferredTurn
+	if currentPlayerIndex == len(userMappings)-1 {
+		saveInstructionTurn = inferredTurn + 1
+	}
+
+	return &TurnInfo{
+		StartedAt:      latestMod,
+		Username:       currentUser.Username,
+		DiscordID:      currentUser.DiscordID,
+		NextUsername:   nextUser.Username,
+		TurnNumber:     saveInstructionTurn,
+		LastRemindedAt: time.Time{},
+	}, inferredTurn
 }
