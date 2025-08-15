@@ -19,14 +19,25 @@ type UserMapping struct {
 // Format: "1 Username1 DiscordId1,2 Username2 DiscordId2"
 // Returns a slice of UserMapping sorted by the order number.
 func ParseUsers(envVarName string) ([]UserMapping, error) {
-	var userMappings []UserMapping
 	envVar := os.Getenv(envVarName)
-
 	if envVar == "" {
 		return nil, fmt.Errorf("environment variable %s not found", envVarName)
 	}
+	return parseUsersFromString(envVar)
+}
 
-	pairs := strings.Split(envVar, ",")
+// ParseUsersFromString parses mappings from a raw string value instead of reading the environment.
+// Format: "1 Username1 DiscordId1,2 Username2 DiscordId2"
+func ParseUsersFromString(raw string) ([]UserMapping, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("empty user mappings string")
+	}
+	return parseUsersFromString(raw)
+}
+
+func parseUsersFromString(input string) ([]UserMapping, error) {
+	var userMappings []UserMapping
+	pairs := strings.Split(input, ",")
 	for i, pair := range pairs {
 		parts := strings.SplitN(strings.TrimSpace(pair), " ", 3) // Split into 3 parts: order, username, discordId
 		if len(parts) == 3 {
@@ -75,7 +86,7 @@ func ParseUsers(envVarName string) ([]UserMapping, error) {
 	}
 
 	if len(userMappings) == 0 {
-		return nil, fmt.Errorf("no valid user mappings found in environment variable %s", envVarName)
+		return nil, fmt.Errorf("no valid user mappings found")
 	}
 
 	return userMappings, nil

@@ -20,6 +20,7 @@ _A Discord bot for automating player turns in Shadow Empire Play-By-Email (PBEM)
 - Sends configurable reminders to players who haven't taken their turn
 - Automatically detects if a save file is misnamed and informs the player
 - Configurable file name pattern matching and debouncing
+- Filters to only process expected file extensions (default: .se1)
 - Runs in Docker for easy deployment
 - Lightweight and efficient
 
@@ -79,6 +80,8 @@ go build -o shadow-empire-bot .
 | `IGNORE_PATTERNS`        | Comma-separated patterns to ignore in filenames                                             |    ❌    | None          |
 | `FILE_DEBOUNCE_MS`       | Milliseconds to wait after file detection before processing                                 |    ❌    | 30000         |
 | `REMINDER_INTERVAL_MINUTES` | Minutes to wait before sending turn reminder notifications                               |    ❌    | 720 (12 hours) |
+| `POLL_INTERVAL_SEC`      | Seconds between directory scans                                                              |    ❌    | 5             |
+| `ALLOWED_EXTENSIONS`     | Comma-separated file extensions to process (no dots)                                         |    ❌    | se1           |
 
 ### .env File Support
 
@@ -116,7 +119,7 @@ The `USER_MAPPINGS` environment variable connects in-game player names with Disc
 USER_MAPPINGS=1 Player1 123456789012345678,2 Player2 234567890123456789
 ```
 
-Each mapping follows the format `PlayerName DiscordUserID`, with multiple mappings separated by commas.
+Each mapping follows the format `Order Username DiscordUserID` with multiple mappings separated by commas.
 
 #### How to Get Discord User IDs
 
@@ -145,12 +148,12 @@ docker run -d \
 
 ### Running from Source
 
-```bash
-export USER_MAPPINGS="1 Player1 123456789012345678,2 Player2 234567890123456789"
-export GAME_NAME="PBEM1"
-export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your-webhook-url"
-export WATCH_DIRECTORY="C:/Users/<username>/Documents/My Games/Shadow Empire/<game name>"
-export REMINDER_INTERVAL_MINUTES="720"
+```powershell
+$env:USER_MAPPINGS = "1 Player1 123456789012345678,2 Player2 234567890123456789"
+$env:GAME_NAME = "PBEM1"
+$env:DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/your-webhook-url"
+$env:WATCH_DIRECTORY = "C:/Users/<username>/Documents/My Games/Shadow Empire/<game name>"
+$env:REMINDER_INTERVAL_MINUTES = "720"
 ./shadow-empire-bot
 ```
 
@@ -160,14 +163,16 @@ export REMINDER_INTERVAL_MINUTES="720"
 
 The main Shadow Empire multiplayer community uses these naming formats:
 
-```
+```text
 PBEM1_turn1_Player1
 ```
 
 or
 
-```
+```text
 PBEM1_Player1_turn1
 ```
 
 > **Note:** The number in PBEM1 can be incremented for different game instances (PBEM2, PBEM3, etc.)
+
+This bot supports both styles and also tolerates missing trailing underscores.

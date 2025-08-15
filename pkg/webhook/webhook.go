@@ -5,20 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
-	"os"
+	"strconv"
 	"time"
 
 	"github.com/1Solon/shadow-empire-pbem-bot/pkg/types"
 )
 
 // prepareWebhookURL adds the wait=true parameter to the webhook URL
-func prepareWebhookURL() (string, error) {
-	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
-
+func prepareWebhookURL(webhookURL string) (string, error) {
 	if webhookURL == "" {
-		fmt.Println("❌ DISCORD_WEBHOOK_URL environment variable is not set")
+		log.Println("❌ DISCORD_WEBHOOK_URL is not configured")
 		return "", fmt.Errorf("webhook URL not set")
 	}
 
@@ -36,18 +35,9 @@ func prepareWebhookURL() (string, error) {
 	return parsedURL.String(), nil
 }
 
-// getGameName returns the configured game name or the default
-func getGameName() string {
-	gameName := os.Getenv("GAME_NAME")
-	if gameName == "" {
-		return "pbem1"
-	}
-	return gameName
-}
-
 // sendDiscordWebhook sends a webhook with retry logic and status code handling
-func sendDiscordWebhook(payload *types.DiscordWebhook, username, discordID string, isRename bool) error {
-	webhookURL, err := prepareWebhookURL()
+func sendDiscordWebhook(payload *types.DiscordWebhook, username, discordID string, isRename bool, cfg types.Config) error {
+	webhookURL, err := prepareWebhookURL(cfg.WebhookURL)
 	if err != nil {
 		return err
 	}
@@ -58,13 +48,18 @@ func sendDiscordWebhook(payload *types.DiscordWebhook, username, discordID strin
 		return fmt.Errorf("error marshaling JSON: %w", err)
 	}
 
+	// HTTP client with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+
 	// Add retry logic
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// Send request
-		resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonPayload))
+		req, _ := http.NewRequest(http.MethodPost, webhookURL, bytes.NewBuffer(jsonPayload))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
 		if err != nil {
-			fmt.Printf("❌ Attempt %d: Failed to send Discord notification: %v\n", attempt, err)
+			log.Printf("❌ Attempt %d: Failed to send Discord notification: %v\n", attempt, err)
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
@@ -83,26 +78,27 @@ func sendDiscordWebhook(payload *types.DiscordWebhook, username, discordID strin
 			if isRename {
 				msgType = "rename notification"
 			}
-			fmt.Printf("ℹ️ Discord returned status 204 for %s to %s (%s)\n", msgType, username, discordID)
-			fmt.Printf("ℹ️ This usually means the webhook was accepted but verify it appeared in Discord\n")
+			log.Printf("ℹ️ Discord returned status 204 for %s to %s (%s)\n", msgType, username, maskID(discordID))
+			log.Printf("ℹ️ This usually means the webhook was accepted but verify it appeared in Discord\n")
 			return nil
 		case 200:
 			msgType := ""
 			if isRename {
 				msgType = "Rename "
 			}
-			fmt.Printf("✅ %snotification sent to %s (%s) successfully\n", msgType, username, discordID)
+			log.Printf("✅ %snotification sent to %s (%s) successfully\n", msgType, username, maskID(discordID))
 			return nil
 		case 429:
-			fmt.Printf("⚠️ Attempt %d: Discord rate limit hit (429). Response: %s\n", attempt, string(body))
+			// Rate limit handling with Retry-After/X-RateLimit-Reset-After
+			retryAfter := parseRetryAfter(resp.Header)
+			log.Printf("⚠️ Attempt %d: Discord rate limit hit (429). Waiting %v before retry. Response: %s\n", attempt, retryAfter, string(body))
 			if attempt < maxRetries {
-				// Wait longer between retries on rate limit
-				time.Sleep(time.Duration(attempt*3) * time.Second)
+				time.Sleep(retryAfter)
 				continue
 			}
 			return fmt.Errorf("discord rate limit exceeded after %d attempts", maxRetries)
 		default:
-			fmt.Printf("❌ Attempt %d: Discord returned unexpected status %d. Response: %s\n",
+			log.Printf("❌ Attempt %d: Discord returned unexpected status %d. Response: %s\n",
 				attempt, resp.StatusCode, string(body))
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt) * time.Second)
@@ -119,8 +115,8 @@ func sendDiscordWebhook(payload *types.DiscordWebhook, username, discordID strin
 // SendWebHook sends a Discord webhook notification to the next player
 // targetUsername/targetDiscordID: The player whose turn it is now (will be pinged)
 // nextPlayerSaveName: The username of the player *after* the target player (used for save instructions)
-func SendWebHook(targetUsername, targetDiscordID, nextPlayerSaveName string, turnNumber int) error {
-	gameName := getGameName()
+func SendWebHook(targetUsername, targetDiscordID, nextPlayerSaveName string, turnNumber int, cfg types.Config) error {
+	gameName := cfg.GameName
 
 	// Create webhook payload
 	payload := types.DiscordWebhook{
@@ -149,12 +145,12 @@ func SendWebHook(targetUsername, targetDiscordID, nextPlayerSaveName string, tur
 	}
 
 	// Pass targetUsername for logging purposes in sendDiscordWebhook
-	return sendDiscordWebhook(&payload, targetUsername, targetDiscordID, false)
+	return sendDiscordWebhook(&payload, targetUsername, targetDiscordID, false, cfg)
 }
 
 // SendRenameWebHook sends a Discord webhook notification asking to rename a file
-func SendRenameWebHook(username, discordID, filename string, turnNumber int) error {
-	gameName := getGameName()
+func SendRenameWebHook(username, discordID, filename string, turnNumber int, cfg types.Config) error {
+	gameName := cfg.GameName
 
 	// Create webhook payload
 	payload := types.DiscordWebhook{
@@ -182,12 +178,12 @@ func SendRenameWebHook(username, discordID, filename string, turnNumber int) err
 		},
 	}
 
-	return sendDiscordWebhook(&payload, username, discordID, true)
+	return sendDiscordWebhook(&payload, username, discordID, true, cfg)
 }
 
 // SendReminderWebHook sends a Discord webhook notification reminding a player it's their turn
-func SendReminderWebHook(username, discordID, nextPlayerSaveName string, turnNumber int, minutesElapsed int) error {
-	gameName := getGameName()
+func SendReminderWebHook(username, discordID, nextPlayerSaveName string, turnNumber int, minutesElapsed int, cfg types.Config) error {
+	gameName := cfg.GameName
 
 	// Format elapsed time as hours and minutes for display
 	hours := minutesElapsed / 60
@@ -227,5 +223,31 @@ func SendReminderWebHook(username, discordID, nextPlayerSaveName string, turnNum
 	}
 
 	// Pass username for logging purposes in sendDiscordWebhook
-	return sendDiscordWebhook(&payload, username, discordID, false)
+	return sendDiscordWebhook(&payload, username, discordID, false, cfg)
+}
+
+// maskID masks Discord IDs in logs
+func maskID(id string) string {
+	if len(id) <= 4 {
+		return "****"
+	}
+	return "****" + id[len(id)-4:]
+}
+
+// parseRetryAfter figures out how long to wait from Discord rate limit headers
+func parseRetryAfter(h http.Header) time.Duration {
+	// Prefer Retry-After (seconds or date), or X-RateLimit-Reset-After (seconds)
+	if v := h.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil {
+			return time.Duration(secs) * time.Second
+		}
+		// If not integer, ignore for simplicity
+	}
+	if v := h.Get("X-RateLimit-Reset-After"); v != "" {
+		if dur, err := strconv.ParseFloat(v, 64); err == nil {
+			return time.Duration(dur * float64(time.Second))
+		}
+	}
+	// fallback: 3 seconds
+	return 3 * time.Second
 }

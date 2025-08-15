@@ -1,17 +1,24 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"github.com/1Solon/shadow-empire-pbem-bot/pkg/monitor"
+	"github.com/1Solon/shadow-empire-pbem-bot/pkg/types"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Set log output with timestamps
+	log.SetFlags(log.LstdFlags)
+
 	// Check if required environment variables exist
 	if os.Getenv("USER_MAPPINGS") == "" || os.Getenv("GAME_NAME") == "" {
 		// If not, try to load from .env file
@@ -29,15 +36,18 @@ func main() {
 		fmt.Println("🔧 Using environment variables from system")
 	}
 
+	// Load config once
+	cfg := types.LoadConfigFromEnv()
+
 	// Check if specific environment variables are set after potential loading
-	if os.Getenv("USER_MAPPINGS") == "" {
+	if cfg.UserMappingsRaw == "" {
 		fmt.Println("⚠️ USER_MAPPINGS environment variable is not set, exiting")
 		os.Exit(1)
 	}
-	if os.Getenv("GAME_NAME") == "" {
+	if os.Getenv("GAME_NAME") == "" { // note: cfg has default applied, call out only when env was empty
 		fmt.Println("ℹ️ GAME_NAME environment variable is not set, using default: pbem1")
 	}
-	if os.Getenv("DISCORD_WEBHOOK_URL") == "" {
+	if cfg.WebhookURL == "" {
 		fmt.Println("⚠️ DISCORD_WEBHOOK_URL environment variable is not set, webhook notifications will fail")
 	}
 
@@ -47,15 +57,18 @@ func main() {
 	}
 
 	// Check if IGNORE_PATTERNS is set
-	if os.Getenv("IGNORE_PATTERNS") != "" {
-		fmt.Printf("🔍 Will ignore files containing patterns: %s\n", os.Getenv("IGNORE_PATTERNS"))
+	if cfg.IgnorePatternsRaw != "" {
+		fmt.Printf("🔍 Will ignore files containing patterns: %s\n", cfg.IgnorePatternsRaw)
 	}
 
 	// Check if FILE_DEBOUNCE_MS is set
 	if os.Getenv("FILE_DEBOUNCE_MS") == "" {
 		fmt.Println("ℹ️ FILE_DEBOUNCE_MS environment variable is not set, using default: 30000 (30 seconds)")
 	} else {
-		fmt.Printf("⏱️ File debounce time set to %s seconds\n", os.Getenv("FILE_DEBOUNCE_MS"))
+		// Convert ms to seconds for display
+		if ms, err := strconv.Atoi(os.Getenv("FILE_DEBOUNCE_MS")); err == nil {
+			fmt.Printf("⏱️ File debounce time set to %d seconds\n", ms/1000)
+		}
 	}
 
 	// Check if REMINDER_INTERVAL_MINUTES is set
@@ -75,13 +88,22 @@ func main() {
 		}
 	}
 
-	// Start monitoring the directory, default to "./data"
-	directoryToWatch := os.Getenv("WATCH_DIRECTORY")
-	if directoryToWatch == "" {
-		directoryToWatch = "./data"
-	}
-	fmt.Printf("👀 Monitoring directory: %s\n", directoryToWatch)
+	// Start monitoring the directory
+	fmt.Printf("👀 Monitoring directory: %s (poll every %ds)\n", cfg.WatchDirectory, cfg.PollIntervalSec)
 
-	// Block and monitor directory
-	monitor.MonitorDirectory(directoryToWatch)
+	// Block and monitor directory with graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle SIGINT/SIGTERM
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigCh
+		fmt.Println("\n🛑 Received shutdown signal, stopping...")
+		cancel()
+	}()
+
+	monitor.MonitorDirectory(ctx, cfg)
 }
