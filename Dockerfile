@@ -1,5 +1,5 @@
 ## Build the app for the target platform
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine@sha256:77dd832edf2752dafd030693bef196abb24dcba3a2bc3d7a6227a7a1dae73169 AS builder
 
 # These are provided automatically by BuildKit/Buildx for each target platform
 ARG TARGETOS
