@@ -134,10 +134,9 @@ func SendWebHook(targetUsername, targetDiscordID, nextPlayerSaveName string, tur
 						Name: "📋 Save File Instructions",
 						// Instruct to save for the player *after* the current one and how to resign
 						Value: fmt.Sprintf(
-							"After completing your turn, please save the file as:\n```\n%s_turn%d_%s\n```\n\nIf you need to resign, create a file named:\n```\n%s_resign_%s\n```\n(or `%s_resign`)",
+							"After completing your turn, save the file as:\n```\n%s_turn%d_%s\n```If the next player is no longer playing, create this file:\n```\nresign_%s\n```",
 							gameName, turnNumber, nextPlayerSaveName,
-							gameName, targetUsername,
-							targetUsername,
+							nextPlayerSaveName,
 						),
 					},
 				},
